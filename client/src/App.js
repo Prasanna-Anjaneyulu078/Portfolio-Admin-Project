@@ -29,7 +29,7 @@ const EMPTY_STATE = {
   resumes: []
 };
 
-const API_BASE = 'http://localhost:3002/api';
+const API_BASE = 'https://prasanna-portfolio-admin.vercel.app/api';
 
 const App = () => {
   const [data, setData] = useState(EMPTY_STATE);
