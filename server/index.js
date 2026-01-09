@@ -16,7 +16,11 @@ const app = express();
 
 // --- MIDDLEWARE ---
 app.use(express.json({ limit: '50mb' })); 
-app.use(cors());
+// Updated CORS to allow frontend to access the filename header
+app.use(cors({
+    origin: "*", 
+    exposedHeaders: ['Content-Disposition'] 
+}));
 
 const PORT = process.env.PORT || 3002;
 const MONGO_URL = process.env.MONGO_URL;
@@ -28,7 +32,7 @@ const connectDB = async () => {
         console.log("MongoDB Connected Successfully");
         app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
     } catch (error) {
-        console.log("MongoDB Connection Error:", error.message);
+        console.error("MongoDB Connection Error:", error.message);
         process.exit(1);
     }
 };
@@ -119,8 +123,6 @@ app.delete('/api/projects/:id', async (req, res) => {
 });
 
 // --- 4. SKILL GROUPS (FULL CRUD) ---
-
-// Create New Skill Category
 app.post('/api/skill-groups', async (req, res) => {
   try {
     const newGroup = new SkillGroup(req.body);
@@ -131,7 +133,6 @@ app.post('/api/skill-groups', async (req, res) => {
   }
 });
 
-// Get All Skill Categories
 app.get('/api/skill-groups', async (req, res) => {
   try {
     const groups = await SkillGroup.find();
@@ -141,7 +142,6 @@ app.get('/api/skill-groups', async (req, res) => {
   }
 });
 
-// Update Skill Category (Flexible ID or Title slug)
 app.put('/api/skill-groups/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -157,7 +157,6 @@ app.put('/api/skill-groups/:id', async (req, res) => {
   }
 });
 
-// Delete Skill Category
 app.delete('/api/skill-groups/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -169,9 +168,7 @@ app.delete('/api/skill-groups/:id', async (req, res) => {
   }
 });
 
-// --- 5. CODING PROFILES (SYNC FEATURE) ---
-
-// Get All Profiles
+// --- 5. CODING PROFILES ---
 app.get('/api/profiles', async (req, res) => {
   try {
     const profiles = await CodingProfile.find();
@@ -181,16 +178,10 @@ app.get('/api/profiles', async (req, res) => {
   }
 });
 
-// Bulk Sync: Add, Update, and Remove by overwriting collection
 app.post('/api/profiles/sync', async (req, res) => {
   try {
-    // 1. Remove all old profiles
     await CodingProfile.deleteMany({});
-    
-    // 2. Prepare new data (remove _id from objects to avoid collision if re-pasting)
     const cleanedData = req.body.map(({ _id, ...rest }) => rest);
-    
-    // 3. Save the new array
     const saved = await CodingProfile.insertMany(cleanedData);
     res.status(200).json(saved);
   } catch (err) {
@@ -198,9 +189,9 @@ app.post('/api/profiles/sync', async (req, res) => {
   }
 });
 
-// --- 4. RESUME (FULL CRUD) ---
+// --- 6. RESUME ROUTES (LATEST UPDATED) ---
 
-// Get all resumes
+// Get all resumes for list
 app.get('/api/resumes', async (req, res) => {
     try {
         const resumes = await Resume.find().sort({ uploadedAt: -1 });
@@ -210,15 +201,12 @@ app.get('/api/resumes', async (req, res) => {
     }
 });
 
-// Upload/Save new resume
+// Upload/Save resume
 app.post('/api/resumes', async (req, res) => {
     try {
-        // If this is the first resume, or it's marked active, 
-        // deactivate others first
         if (req.body.isActive) {
             await Resume.updateMany({}, { isActive: false });
         }
-
         const newResume = new Resume(req.body);
         const saved = await newResume.save();
         res.status(201).json(saved);
@@ -227,20 +215,15 @@ app.post('/api/resumes', async (req, res) => {
     }
 });
 
-// Toggle Active Status
-// Ensure this part of your server.js looks like this:
+// Toggle Active
 app.patch('/api/resumes/:id/active', async (req, res) => {
     try {
-        // 1. Set EVERY resume to inactive
         await Resume.updateMany({}, { isActive: false });
-        
-        // 2. Set the SPECIFIC resume to active
         const updated = await Resume.findByIdAndUpdate(
             req.params.id, 
             { isActive: true }, 
             { new: true }
         );
-        
         if (!updated) return res.status(404).json({ message: "Resume ID not found" });
         res.json(updated);
     } catch (err) {
@@ -258,57 +241,40 @@ app.delete('/api/resumes/:id', async (req, res) => {
     }
 });
 
-// Add this to your main server.js
-// app.get('/api/resume/download', async (req, res) => {
-//   try {
-//     const user = await User.findOne(); // Fetches your profile
-//     if (!user || !user.resume) {
-//       return res.status(404).json({ message: "Resume not found" });
-//     }
-
-//     // Assuming user.resume is a Base64 string from your Admin Panel
-//     // We remove the data URL prefix if it exists
-//     const base64Data = user.resume.replace(/^data:application\/pdf;base64,/, "");
-//     const pdfBuffer = Buffer.from(base64Data, 'base64');
-
-//     // Set headers to tell the browser it's a file download
-//     res.setHeader('Content-Type', 'application/pdf');
-//     res.setHeader('Content-Disposition', `attachment; filename=${user.name.replace(/\s+/g, '_')}_Resume.pdf`);
-    
-//     res.send(pdfBuffer);
-//   } catch (err) {
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// });
-
-// --- UPDATED RESUME DOWNLOAD API ---
+// LATEST UPDATED RESUME DOWNLOAD API
 app.get('/api/resume/download', async (req, res) => {
   try {
-    // 1. Find the active resume from the Resume model
-    // const activeResume = await Resume.findOne({ isActive: true });
-    // Change Resume.findOne({ isActive: true }) to just Resume.findOne()
-    const activeResume = await Resume.findOne().sort({ uploadedAt: -1 });
-
-    if (!activeResume || !activeResume.fileData) {
-      return res.status(404).json({ message: "No active resume found" });
+    // Priority 1: Look for an active resume. 
+    // Priority 2: If none active, get the most recent upload.
+    let activeResume = await Resume.findOne({ isActive: true });
+    
+    if (!activeResume) {
+      activeResume = await Resume.findOne().sort({ uploadedAt: -1 });
     }
 
-    // 2. Fetch user name for a personalized filename (optional but recommended)
-    const user = await personalDetailsModel.findOne();
-    const fileName = user ? `${user.name.replace(/\s+/g, '_')}_Resume.pdf` : 'Resume.pdf';
+    if (!activeResume || !activeResume.fileData) {
+      return res.status(404).json({ message: "Resume file data not found" });
+    }
 
-    // 3. Process the Base64 data
-    // Remove the data URL prefix (e.g., "data:application/pdf;base64,") if present
+    // Fetch user for name; default to "User" if profile not set
+    const user = await personalDetailsModel.findOne();
+    const displayName = user?.name ? user.name.replace(/\s+/g, '_') : 'My';
+    const fileName = `${displayName}_Resume.pdf`;
+
+    // Strip Base64 prefix if it exists
     const base64Data = activeResume.fileData.replace(/^data:application\/pdf;base64,/, "");
+    
+    // Create Buffer
     const pdfBuffer = Buffer.from(base64Data, 'base64');
 
-    // 4. Set headers and send the file
+    // Headers
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+    res.setHeader('Content-Length', pdfBuffer.length);
     
     res.send(pdfBuffer);
   } catch (err) {
-    console.error("Download Error:", err);
+    console.error("Critical Download Error:", err);
     res.status(500).json({ message: "Internal Server Error", error: err.message });
   }
 });
