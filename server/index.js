@@ -228,16 +228,20 @@ app.post('/api/resumes', async (req, res) => {
 });
 
 // Toggle Active Status
+// Ensure this part of your server.js looks like this:
 app.patch('/api/resumes/:id/active', async (req, res) => {
     try {
-        // Set all to false
+        // 1. Set EVERY resume to inactive
         await Resume.updateMany({}, { isActive: false });
-        // Set target to true
+        
+        // 2. Set the SPECIFIC resume to active
         const updated = await Resume.findByIdAndUpdate(
             req.params.id, 
             { isActive: true }, 
             { new: true }
         );
+        
+        if (!updated) return res.status(404).json({ message: "Resume ID not found" });
         res.json(updated);
     } catch (err) {
         res.status(400).json({ message: err.message });
@@ -255,24 +259,56 @@ app.delete('/api/resumes/:id', async (req, res) => {
 });
 
 // Add this to your main server.js
+// app.get('/api/resume/download', async (req, res) => {
+//   try {
+//     const user = await User.findOne(); // Fetches your profile
+//     if (!user || !user.resume) {
+//       return res.status(404).json({ message: "Resume not found" });
+//     }
+
+//     // Assuming user.resume is a Base64 string from your Admin Panel
+//     // We remove the data URL prefix if it exists
+//     const base64Data = user.resume.replace(/^data:application\/pdf;base64,/, "");
+//     const pdfBuffer = Buffer.from(base64Data, 'base64');
+
+//     // Set headers to tell the browser it's a file download
+//     res.setHeader('Content-Type', 'application/pdf');
+//     res.setHeader('Content-Disposition', `attachment; filename=${user.name.replace(/\s+/g, '_')}_Resume.pdf`);
+    
+//     res.send(pdfBuffer);
+//   } catch (err) {
+//     res.status(500).json({ message: "Internal Server Error" });
+//   }
+// });
+
+// --- UPDATED RESUME DOWNLOAD API ---
 app.get('/api/resume/download', async (req, res) => {
   try {
-    const user = await User.findOne(); // Fetches your profile
-    if (!user || !user.resume) {
-      return res.status(404).json({ message: "Resume not found" });
+    // 1. Find the active resume from the Resume model
+    // const activeResume = await Resume.findOne({ isActive: true });
+    // Change Resume.findOne({ isActive: true }) to just Resume.findOne()
+    const activeResume = await Resume.findOne().sort({ uploadedAt: -1 });
+
+    if (!activeResume || !activeResume.fileData) {
+      return res.status(404).json({ message: "No active resume found" });
     }
 
-    // Assuming user.resume is a Base64 string from your Admin Panel
-    // We remove the data URL prefix if it exists
-    const base64Data = user.resume.replace(/^data:application\/pdf;base64,/, "");
+    // 2. Fetch user name for a personalized filename (optional but recommended)
+    const user = await personalDetailsModel.findOne();
+    const fileName = user ? `${user.name.replace(/\s+/g, '_')}_Resume.pdf` : 'Resume.pdf';
+
+    // 3. Process the Base64 data
+    // Remove the data URL prefix (e.g., "data:application/pdf;base64,") if present
+    const base64Data = activeResume.fileData.replace(/^data:application\/pdf;base64,/, "");
     const pdfBuffer = Buffer.from(base64Data, 'base64');
 
-    // Set headers to tell the browser it's a file download
+    // 4. Set headers and send the file
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=${user.name.replace(/\s+/g, '_')}_Resume.pdf`);
+    res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
     
     res.send(pdfBuffer);
   } catch (err) {
-    res.status(500).json({ message: "Internal Server Error" });
+    console.error("Download Error:", err);
+    res.status(500).json({ message: "Internal Server Error", error: err.message });
   }
 });
